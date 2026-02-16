@@ -68,6 +68,26 @@ const leagueSchema = new mongoose.Schema({
       type: Number,
       default: defaults.MAX_SUBSTITUTIONS,
     },
+    baseRating: {
+      type: Number,
+      default: defaults.BASE_RATING,
+    },
+    minutesThreshold: {
+      type: Number,
+      default: defaults.MINUTES_THRESHOLD,
+    },
+    minutesBonus: {
+      type: Number,
+      default: defaults.MINUTES_BONUS,
+    },
+    minScore: {
+      type: Number,
+      default: defaults.MIN_SCORE,
+    },
+    maxScore: {
+      type: Number,
+      default: defaults.MAX_SCORE,
+    },
   },
 }, { timestamps: true });
 

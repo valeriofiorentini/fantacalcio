@@ -1,8 +1,10 @@
 const express = require('express');
-const { body, query, validationResult } = require('express-validator');
+const { body, validationResult } = require('express-validator');
 const { authenticate } = require('../middleware/auth');
 const Player = require('../models/Player');
 const PlayerScore = require('../models/PlayerScore');
+const League = require('../models/League');
+const { calculatePlayerScore } = require('../utils/scoring');
 
 const router = express.Router();
 
@@ -46,11 +48,12 @@ router.post('/', authenticate, [
   }
 });
 
-// POST /api/players/scores - Admin: import matchday scores
-router.post('/scores', authenticate, [
+// POST /api/players/events - Import match events for a matchday (no manual ratings!)
+router.post('/events', authenticate, [
   body('matchday').isInt({ min: 1 }),
-  body('scores').isArray({ min: 1 }),
-  body('scores.*.playerId').notEmpty(),
+  body('events').isArray({ min: 1 }),
+  body('events.*.playerId').notEmpty(),
+  body('events.*.minutes').isInt({ min: 0 }),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -58,23 +61,22 @@ router.post('/scores', authenticate, [
   }
 
   try {
-    const { matchday, scores } = req.body;
-    const ops = scores.map(s => ({
+    const { matchday, events } = req.body;
+    const ops = events.map(e => ({
       updateOne: {
-        filter: { player: s.playerId, matchday },
+        filter: { player: e.playerId, matchday },
         update: {
           $set: {
-            rating: s.rating,
-            played: s.played ?? (s.rating != null),
-            goals: s.goals || 0,
-            assists: s.assists || 0,
-            yellowCards: s.yellowCards || 0,
-            redCard: s.redCard || false,
-            ownGoals: s.ownGoals || 0,
-            penaltySaved: s.penaltySaved || 0,
-            penaltyMissed: s.penaltyMissed || 0,
-            goalsConceded: s.goalsConceded || 0,
-            cleanSheet: s.cleanSheet || false,
+            minutes: e.minutes || 0,
+            goals: e.goals || 0,
+            assists: e.assists || 0,
+            yellowCards: e.yellowCards || 0,
+            redCard: e.redCard || false,
+            ownGoals: e.ownGoals || 0,
+            penaltiesScored: e.penaltiesScored || 0,
+            penaltyMissed: e.penaltyMissed || 0,
+            penaltySaved: e.penaltySaved || 0,
+            goalsConceded: e.goalsConceded || 0,
           },
         },
         upsert: true,
@@ -82,7 +84,133 @@ router.post('/scores', authenticate, [
     }));
 
     const result = await PlayerScore.bulkWrite(ops);
-    res.json({ message: 'Voti importati', modified: result.modifiedCount, upserted: result.upsertedCount });
+    res.json({
+      message: 'Eventi importati',
+      modified: result.modifiedCount,
+      upserted: result.upsertedCount,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/players/votes/:matchday - View calculated votes for a matchday
+// Optional query: ?leagueId=xxx (to use league-specific rules)
+router.get('/votes/:matchday', authenticate, async (req, res) => {
+  try {
+    const matchday = Number(req.params.matchday);
+
+    // Load league rules if specified
+    let rules = null;
+    if (req.query.leagueId) {
+      const league = await League.findById(req.query.leagueId);
+      if (league) {
+        rules = league.rules;
+      }
+    }
+
+    // Get all events for this matchday
+    const events = await PlayerScore.find({ matchday }).populate({
+      path: 'player',
+      model: 'Player',
+    });
+
+    const votes = events.map(event => {
+      const player = event.player;
+      const fantavoto = calculatePlayerScore(event, player.role, rules);
+
+      return {
+        playerId: player._id,
+        name: player.name,
+        role: player.role,
+        realTeam: player.realTeam,
+        matchday,
+        minutes: event.minutes,
+        fantavoto, // null = SV (senza voto)
+        details: {
+          goals: event.goals,
+          assists: event.assists,
+          yellowCards: event.yellowCards,
+          redCard: event.redCard,
+          ownGoals: event.ownGoals,
+          penaltiesScored: event.penaltiesScored,
+          penaltyMissed: event.penaltyMissed,
+          penaltySaved: event.penaltySaved,
+          goalsConceded: event.goalsConceded,
+        },
+      };
+    });
+
+    // Sort: players with votes first (by score desc), then SV
+    votes.sort((a, b) => {
+      if (a.fantavoto === null && b.fantavoto === null) return 0;
+      if (a.fantavoto === null) return 1;
+      if (b.fantavoto === null) return -1;
+      return b.fantavoto - a.fantavoto;
+    });
+
+    // Optional role filter
+    const filtered = req.query.role
+      ? votes.filter(v => v.role === req.query.role.toUpperCase())
+      : votes;
+
+    res.json({
+      matchday,
+      count: filtered.length,
+      votes: filtered,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/players/votes/:matchday/:playerId - Single player vote detail
+router.get('/votes/:matchday/:playerId', authenticate, async (req, res) => {
+  try {
+    const matchday = Number(req.params.matchday);
+    const event = await PlayerScore.findOne({
+      player: req.params.playerId,
+      matchday,
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Nessun dato per questa giornata' });
+    }
+
+    const player = await Player.findById(req.params.playerId);
+    if (!player) {
+      return res.status(404).json({ error: 'Giocatore non trovato' });
+    }
+
+    // Load league rules if specified
+    let rules = null;
+    if (req.query.leagueId) {
+      const league = await League.findById(req.query.leagueId);
+      if (league) rules = league.rules;
+    }
+
+    const fantavoto = calculatePlayerScore(event, player.role, rules);
+
+    res.json({
+      playerId: player._id,
+      name: player.name,
+      role: player.role,
+      realTeam: player.realTeam,
+      matchday,
+      minutes: event.minutes,
+      fantavoto,
+      details: {
+        goals: event.goals,
+        assists: event.assists,
+        yellowCards: event.yellowCards,
+        redCard: event.redCard,
+        ownGoals: event.ownGoals,
+        penaltiesScored: event.penaltiesScored,
+        penaltyMissed: event.penaltyMissed,
+        penaltySaved: event.penaltySaved,
+        goalsConceded: event.goalsConceded,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

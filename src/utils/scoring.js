@@ -1,55 +1,91 @@
 const defaults = require('../config/defaults');
 
 /**
- * Calculate the fantasy score for a player on a given matchday.
- * @param {Object} scoreData - PlayerScore document
- * @param {string} role - Player role (P, D, C, A)
- * @param {Object} bonus - Bonus config (Map or plain object)
- * @param {Object} malus - Malus config (Map or plain object)
- * @returns {number|null} Fantasy score or null if player didn't play
+ * Calcola il fantavoto di un giocatore partendo dagli eventi partita.
+ * Nessun voto manuale: tutto calcolato automaticamente.
+ *
+ * ALGORITMO:
+ * 1. Se minutes == 0 → SV (non ha giocato) → return null
+ * 2. Voto base = 6.0
+ * 3. Se minutes >= 60 → +0.5
+ * 4. Gol * bonus per ruolo (P=6, D=6, C=4, A=3)
+ * 5. Assist * 1
+ * 6. Ammonizione -0.5, Espulsione -1, Autogol -2
+ * 7. Portiere: rigori parati *3, gol subiti *-1, porta inviolata (>=60min, 0 gol) +1
+ * 8. Rigore segnato +3, Rigore sbagliato -3
+ * 9. Clamp tra 3 e 10
+ *
+ * @param {Object} event - Dati evento partita (PlayerScore document)
+ * @param {string} role - Ruolo giocatore (P, D, C, A)
+ * @param {Object} [rules] - Regole personalizzate della lega
+ * @returns {number|null} Fantavoto calcolato, o null se SV
  */
-function calculatePlayerScore(scoreData, role, bonus, malus) {
-  if (!scoreData || !scoreData.played || scoreData.rating == null) {
-    return null;
+function calculatePlayerScore(event, role, rules) {
+  if (!event || event.minutes === 0 || event.minutes == null) {
+    return null; // SV - senza voto
   }
 
-  const b = bonus instanceof Map ? Object.fromEntries(bonus) : (bonus || defaults.BONUS);
-  const m = malus instanceof Map ? Object.fromEntries(malus) : (malus || defaults.MALUS);
+  const r = rules || {};
+  const b = r.bonus instanceof Map ? Object.fromEntries(r.bonus) : (r.bonus || defaults.BONUS);
+  const m = r.malus instanceof Map ? Object.fromEntries(r.malus) : (r.malus || defaults.MALUS);
+  const baseRating = r.baseRating || defaults.BASE_RATING;
+  const minutesThreshold = r.minutesThreshold || defaults.MINUTES_THRESHOLD;
+  const minutesBonus = r.minutesBonus != null ? r.minutesBonus : defaults.MINUTES_BONUS;
+  const minScore = r.minScore != null ? r.minScore : defaults.MIN_SCORE;
+  const maxScore = r.maxScore != null ? r.maxScore : defaults.MAX_SCORE;
 
-  let score = scoreData.rating;
+  // 1. Voto base
+  let score = baseRating;
 
-  // Bonus
-  if (scoreData.goals > 0) {
+  // 2. Bonus minutaggio
+  if (event.minutes >= minutesThreshold) {
+    score += minutesBonus;
+  }
+
+  // 3. Bonus gol per ruolo
+  if (event.goals > 0) {
     const goalKey = `GOAL_${role}`;
     const goalBonus = b[goalKey] || b.GOAL_A || 3;
-    score += scoreData.goals * goalBonus;
-  }
-  score += scoreData.assists * (b.ASSIST || 1);
-  score += scoreData.penaltySaved * (b.PENALTY_SAVED || 3);
-  if (scoreData.cleanSheet) {
-    score += (b.CLEAN_SHEET || 1);
+    score += event.goals * goalBonus;
   }
 
-  // Malus
-  score -= scoreData.yellowCards * (m.YELLOW_CARD || 0.5);
-  if (scoreData.redCard) {
+  // 4. Assist
+  score += (event.assists || 0) * (b.ASSIST || 1);
+
+  // 5. Malus disciplinari
+  score -= (event.yellowCards || 0) * (m.YELLOW_CARD || 0.5);
+  if (event.redCard) {
     score -= (m.RED_CARD || 1);
   }
-  score -= scoreData.ownGoals * (m.OWN_GOAL || 2);
-  score -= scoreData.penaltyMissed * (m.PENALTY_MISSED || 3);
+  score -= (event.ownGoals || 0) * (m.OWN_GOAL || 2);
+
+  // 6. Portiere: rigori parati, gol subiti, porta inviolata
   if (role === 'P') {
-    score -= scoreData.goalsConceded * (m.GOAL_CONCEDED || 1);
+    score += (event.penaltySaved || 0) * (b.PENALTY_SAVED || 3);
+    score -= (event.goalsConceded || 0) * (m.GOAL_CONCEDED || 1);
+
+    // Porta inviolata: 0 gol subiti e almeno 60 minuti
+    if ((event.goalsConceded || 0) === 0 && event.minutes >= minutesThreshold) {
+      score += (b.CLEAN_SHEET || 1);
+    }
   }
+
+  // 7. Rigori (tutti i ruoli)
+  score += (event.penaltiesScored || 0) * (b.PENALTY_SCORED || 3);
+  score -= (event.penaltyMissed || 0) * (m.PENALTY_MISSED || 3);
+
+  // 8. Clamp: evita punteggi assurdi
+  score = Math.max(minScore, Math.min(maxScore, score));
 
   return score;
 }
 
 /**
- * Convert fantasy points to goals for head-to-head matches.
- * @param {number} points - Total fantasy points
- * @param {number} threshold - Points for first goal (default 66)
- * @param {number} interval - Points per additional goal (default 6)
- * @returns {number} Number of goals
+ * Converte i fantapunti totali in gol per scontri diretti.
+ * @param {number} points - Fantapunti totali della squadra
+ * @param {number} [threshold] - Soglia per il primo gol (default 66)
+ * @param {number} [interval] - Punti per ogni gol aggiuntivo (default 6)
+ * @returns {number} Numero di gol
  */
 function pointsToGoals(points, threshold, interval) {
   const t = threshold || defaults.GOAL_THRESHOLD;

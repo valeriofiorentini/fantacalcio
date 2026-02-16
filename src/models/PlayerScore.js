@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 
+// Evento partita - solo dati grezzi, il voto viene calcolato
 const playerScoreSchema = new mongoose.Schema({
   player: {
     type: mongoose.Schema.Types.ObjectId,
@@ -10,23 +11,17 @@ const playerScoreSchema = new mongoose.Schema({
     type: Number,
     required: true,
   },
-  rating: {
-    type: Number,  // Voto base (e.g. 6.5)
-    default: null,
-  },
-  played: {
-    type: Boolean,
-    default: false,
-  },
+  // Dati grezzi della partita
+  minutes: { type: Number, default: 0 },        // Minuti giocati (0 = non entrato)
   goals: { type: Number, default: 0 },
   assists: { type: Number, default: 0 },
   yellowCards: { type: Number, default: 0 },
   redCard: { type: Boolean, default: false },
   ownGoals: { type: Number, default: 0 },
-  penaltySaved: { type: Number, default: 0 },
-  penaltyMissed: { type: Number, default: 0 },
-  goalsConceded: { type: Number, default: 0 },  // For goalkeepers
-  cleanSheet: { type: Boolean, default: false },
+  penaltiesScored: { type: Number, default: 0 }, // Rigori segnati
+  penaltyMissed: { type: Number, default: 0 },   // Rigori sbagliati
+  penaltySaved: { type: Number, default: 0 },    // Rigori parati (portiere)
+  goalsConceded: { type: Number, default: 0 },   // Gol subiti (portiere)
 });
 
 playerScoreSchema.index({ player: 1, matchday: 1 }, { unique: true });

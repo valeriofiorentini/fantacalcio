@@ -11,39 +11,37 @@ const { calculatePlayerScore, pointsToGoals } = require('../utils/scoring');
 const router = express.Router();
 
 /**
- * Calculate a team's total fantasy score for a matchday,
- * applying automatic substitutions for non-playing starters.
+ * Calcola il punteggio totale di una squadra per una giornata,
+ * con sostituzioni automatiche per titolari che non hanno giocato.
  */
 async function calculateTeamScore(lineup, matchday, league) {
   const starterPlayers = await Player.find({ _id: { $in: lineup.starters } });
   const benchPlayers = await Player.find({ _id: { $in: lineup.bench } });
 
-  const bonus = league.rules.bonus;
-  const malus = league.rules.malus;
-  const maxSubs = league.rules.maxSubstitutions;
+  const rules = league.rules;
+  const maxSubs = rules.maxSubstitutions;
 
   let totalScore = 0;
   let subsUsed = 0;
   const details = [];
 
-  // Process starters
   for (const player of starterPlayers) {
-    const scoreData = await PlayerScore.findOne({ player: player._id, matchday });
-    const pts = calculatePlayerScore(scoreData, player.role, bonus, malus);
+    const event = await PlayerScore.findOne({ player: player._id, matchday });
+    const pts = calculatePlayerScore(event, player.role, rules);
 
     if (pts !== null) {
       totalScore += pts;
       details.push({ player: player.name, role: player.role, score: pts, sub: false });
     } else if (subsUsed < maxSubs) {
-      // Try substitution from bench (same role priority)
+      // Sostituzione automatica: cerca panchinaro stesso ruolo
       const sub = benchPlayers.find(bp => {
         const alreadyUsed = details.some(d => d.player === bp.name && d.sub);
         return !alreadyUsed && bp.role === player.role;
       });
 
       if (sub) {
-        const subScore = await PlayerScore.findOne({ player: sub._id, matchday });
-        const subPts = calculatePlayerScore(subScore, sub.role, bonus, malus);
+        const subEvent = await PlayerScore.findOne({ player: sub._id, matchday });
+        const subPts = calculatePlayerScore(subEvent, sub.role, rules);
         if (subPts !== null) {
           totalScore += subPts;
           subsUsed++;
@@ -56,7 +54,7 @@ async function calculateTeamScore(lineup, matchday, league) {
   return { totalScore, details };
 }
 
-// POST /api/scores/calculate/:leagueId/:matchday - Admin calculates matchday results
+// POST /api/scores/calculate/:leagueId/:matchday - Admin calcola risultati giornata
 router.post('/calculate/:leagueId/:matchday', authenticate, async (req, res) => {
   try {
     const { leagueId, matchday } = req.params;
@@ -82,7 +80,7 @@ router.post('/calculate/:leagueId/:matchday', authenticate, async (req, res) => 
       results.push({ teamId: team._id, team: team.name, totalScore, details });
     }
 
-    // Create head-to-head match results (pair teams sequentially)
+    // Scontri diretti (accoppia le squadre in ordine)
     const matchResults = [];
     for (let i = 0; i < results.length - 1; i += 2) {
       const home = results[i];
@@ -119,7 +117,7 @@ router.post('/calculate/:leagueId/:matchday', authenticate, async (req, res) => 
   }
 });
 
-// GET /api/scores/standings/:leagueId - Get league standings
+// GET /api/scores/standings/:leagueId - Classifica della lega
 router.get('/standings/:leagueId', authenticate, async (req, res) => {
   try {
     const teams = await Team.find({ league: req.params.leagueId }).populate('user', 'username');
@@ -153,7 +151,7 @@ router.get('/standings/:leagueId', authenticate, async (req, res) => {
         wins,
         draws,
         losses,
-        points: wins * 3 + draws, // League points
+        points: wins * 3 + draws,
         totalFantasyPoints: totalPoints,
       };
     });

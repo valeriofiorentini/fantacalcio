@@ -23,17 +23,26 @@ module.exports = {
     '5-4-1',
   ],
 
-  // Bonus points
+  // Voto base per tutti i giocatori
+  BASE_RATING: 6.0,
+
+  // Bonus minutaggio
+  MINUTES_THRESHOLD: 60,  // >= 60 minuti = +0.5
+  MINUTES_BONUS: 0.5,
+
+  // Bonus gol per ruolo
   BONUS: {
-    GOAL_A: 3,    // Gol attaccante
-    GOAL_C: 4,    // Gol centrocampista
+    GOAL_P: 6,    // Gol portiere
     GOAL_D: 6,    // Gol difensore
-    ASSIST: 1,    // Assist
-    PENALTY_SAVED: 3,   // Rigore parato
-    CLEAN_SHEET: 1,     // Porta inviolata
+    GOAL_C: 4,    // Gol centrocampista
+    GOAL_A: 3,    // Gol attaccante
+    ASSIST: 1,
+    PENALTY_SCORED: 3,   // Rigore segnato
+    PENALTY_SAVED: 3,    // Rigore parato (portiere)
+    CLEAN_SHEET: 1,      // Porta inviolata (portiere, >= 60 min)
   },
 
-  // Malus points (stored as positive, subtracted in calculation)
+  // Malus (valori positivi, vengono sottratti nel calcolo)
   MALUS: {
     YELLOW_CARD: 0.5,
     RED_CARD: 1,
@@ -42,14 +51,18 @@ module.exports = {
     GOAL_CONCEDED: 1,  // Per portiere
   },
 
-  // Match result calculation
-  GOAL_THRESHOLD: 66,  // Base points for 1 goal
-  GOAL_INTERVAL: 6,    // Every N extra points = +1 goal
+  // Clamp del voto finale
+  MIN_SCORE: 3,
+  MAX_SCORE: 10,
 
-  // Substitutions
+  // Calcolo risultato partita
+  GOAL_THRESHOLD: 66,  // Punti base per 1 gol
+  GOAL_INTERVAL: 6,    // Ogni N punti extra = +1 gol
+
+  // Sostituzioni
   MAX_SUBSTITUTIONS: 3,
 
-  // League
+  // Lega
   MIN_TEAMS: 4,
   MAX_TEAMS: 12,
 };
